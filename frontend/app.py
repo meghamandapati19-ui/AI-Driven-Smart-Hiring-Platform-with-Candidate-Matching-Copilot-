@@ -1972,21 +1972,23 @@ def candidate_dashboard():
             "🔎 Available Jobs",
             "💼 Applied Jobs",
             "📋 Application Status",
+            "📩 Messages",
             "🎤 Interview",
             "🤖 AI Interview Questions",
             "📊 Interview Performance",
             "💬 Contact Recruiter"
         ]
     )
-
     # ====================================================
-    # MY PROFILE
+    # MESSAGES / INBOX
     # ====================================================
 
-    if menu == "👤 My Profile":
+    if menu == "📩 Messages":
 
-        st.title("👤 My Profile")
+        st.title("📩 Messages")
+        st.subheader("Recruiter Messages")
 
+        # Get logged-in candidate ID
         candidate_id = st.session_state.get("candidate_id")
 
         if not candidate_id:
@@ -1994,6 +1996,80 @@ def candidate_dashboard():
             st.error("❌ Candidate ID not found. Please login again.")
 
         else:
+
+            try:
+
+                response = requests.get(
+                    f"{API_URL}/candidate/{candidate_id}/messages",
+                    timeout=30
+                )
+
+                if response.status_code == 200:
+
+                    data = response.json()
+                    messages = data.get("messages", [])
+
+                    if messages:
+
+                        st.success(
+                            f"📬 You have {len(messages)} recruiter message(s)."
+                        )
+
+                        for msg in messages:
+
+                            subject = msg.get("subject") or "No Subject"
+                            message_text = msg.get("message") or ""
+                            sender = msg.get("sender") or "Recruiter"
+                            created_at = msg.get("created_at") or ""
+
+                            with st.expander(f"📩 {message_text}"):
+
+                                st.write(f"**From:** {sender}")
+                                st.write(f"**Date:** {created_at}")
+
+                                st.divider()
+
+                                
+                                st.write(f"**Message:** {message_text}")
+
+                    else:
+
+                        st.info("📭 No recruiter messages available.")
+
+                        st.write(
+                            "Messages from recruiters will appear here when a recruiter "
+                            "sends you a message."
+                        )
+
+                else:
+
+                    st.error(
+                        f"❌ Unable to fetch messages. Status code: "
+                        f"{response.status_code}"
+                    )
+
+                    try:
+                        st.error(response.json().get("detail", "Unknown error"))
+                    except:
+                        pass
+
+            except Exception as e:
+
+                st.error(f"❌ Error connecting to backend: {e}")
+    # ====================================================
+    # MY PROFILE
+    # ====================================================
+
+    elif menu == "👤 My Profile":
+
+        st.title("👤 My Profile")
+        candidate_id = st.session_state.get("candidate_id")
+        if not candidate_id:
+            st.error("❌ Candidate ID not found. Please login again.")
+        else:
+            st.success(f"🆔 Candidate ID: {candidate_id}")
+
+        
 
             try:
 
@@ -9779,5 +9855,4 @@ st.markdown("---")
 st.caption( 
 
     "AI Recruitment & Talent Management Copilot | Infosys Springboard Project" 
-
 )

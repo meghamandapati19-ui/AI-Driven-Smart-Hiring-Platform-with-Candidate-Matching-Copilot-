@@ -219,6 +219,33 @@ def create_milestone4_tables():
 
     conn = get_connection()
     cursor = conn.cursor()
+    # =====================================================
+    # Create Messages Table
+    # =====================================================
+
+    def create_messages_table():
+
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            candidate_id INTEGER NOT NULL,
+            job_id INTEGER,
+            subject TEXT,
+            message TEXT NOT NULL,
+            sender TEXT DEFAULT 'Recruiter',
+            is_read INTEGER DEFAULT 0,
+            created_at TEXT
+        )
+        """)
+
+        conn.commit()
+        conn.close()
+
+
+    create_messages_table()
 
     # -------------------------------------------------
     # Interview Results Table
@@ -1356,8 +1383,127 @@ def generate_email_api(
         job,
         email_type
     )
+# =====================================================
+# Send Recruiter Message to Candidate
+# =====================================================
+
+class MessageRequest(BaseModel):
+    candidate_id: int
+    job_id: int | None = None
+    subject: str
+    message: str
 
 
+@app.post("/send-message")
+def send_message(data: MessageRequest):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # Check whether candidate exists
+    cursor.execute(
+        "SELECT id FROM candidates WHERE id = ?",
+        (data.candidate_id,)
+    )
+
+    candidate = cursor.fetchone()
+
+    if candidate is None:
+        conn.close()
+        raise HTTPException(
+            status_code=404,
+            detail="Candidate not found."
+        )
+
+    # Save message
+    cursor.execute(
+        """
+        INSERT INTO messages
+        (
+            candidate_id,
+            job_id,
+            subject,
+            message,
+            sender,
+            is_read,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            data.candidate_id,
+            data.job_id,
+            data.subject,
+            data.message,
+            "Recruiter",
+            0,
+            datetime.now().isoformat()
+        )
+    )
+
+    message_id = cursor.lastrowid
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": True,
+        "message": "Message sent successfully.",
+        "message_id": message_id,
+        "candidate_id": data.candidate_id
+    }
+
+# =====================================================
+# GET CANDIDATE MESSAGES
+# =====================================================
+
+@app.get("/candidate/{candidate_id}/messages")
+def get_candidate_messages(candidate_id: int):
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # Get all messages for this candidate
+    cursor.execute(
+        """
+        SELECT
+            id,
+            candidate_id,
+            job_id,
+            subject,
+            message,
+            sender,
+            is_read,
+            created_at
+        FROM messages
+        WHERE candidate_id = ?
+        ORDER BY created_at DESC
+        """,
+        (candidate_id,)
+    )
+
+    messages = cursor.fetchall()
+
+    conn.close()
+
+    result = []
+
+    for msg in messages:
+        result.append({
+            "id": msg[0],
+            "candidate_id": msg[1],
+            "job_id": msg[2],
+            "subject": msg[3],
+            "message": msg[4],
+            "sender": msg[5],
+            "is_read": msg[6],
+            "created_at": msg[7]
+        })
+
+    return {
+        "success": True,
+        "messages": result
+    }
 # =====================================================
 # AI Resume Summary
 # =====================================================

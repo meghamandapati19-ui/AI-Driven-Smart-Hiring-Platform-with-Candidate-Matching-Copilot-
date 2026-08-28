@@ -8,7 +8,7 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 
-def generate_interview_questions(job_description, candidate_resume):
+def generate_gemini_questions(job_description, candidate_resume):
     """
     Generate interview questions based on the job description
     and candidate resume.
@@ -18,7 +18,7 @@ def generate_interview_questions(job_description, candidate_resume):
 You are an AI recruitment assistant.
 
 Generate interview questions for the candidate based on the
-job description and resume given below.
+job description and candidate resume given below.
 
 JOB DESCRIPTION:
 {job_description}
@@ -40,3 +40,11 @@ Keep the questions clear, relevant and suitable for an interview.
 
     except Exception as e:
         return f"Error generating interview questions: {str(e)}"
+
+
+# Backward-compatible function
+def generate_interview_questions(job_description, candidate_resume):
+    return generate_gemini_questions(
+        job_description,
+        candidate_resume
+    )
