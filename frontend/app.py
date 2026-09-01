@@ -4,7 +4,8 @@ import pandas as pd
 import io
 import os
 from urllib.parse import quote
-
+import smtplib
+from email.message import EmailMessage
 from docx import Document
 from dotenv import load_dotenv
 from groq import Groq
@@ -30,12 +31,99 @@ if GROQ_API_KEY:
     )
 else:
     groq_client = None
+# ============================================================
+# EMAIL CONFIGURATION
+# ============================================================
 
+EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")
+EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD")
+
+# ============================================================
+# SEND EMAIL DIRECTLY TO CANDIDATE
+# ============================================================
+
+def send_email_to_candidate(
+    recipient_email,
+    subject,
+    body
+):
+    """
+    Sends the recruiter-generated email directly
+    to the candidate using Gmail SMTP.
+    """
+
+    if not EMAIL_ADDRESS:
+        return False, "EMAIL_ADDRESS is not configured."
+
+    if not EMAIL_APP_PASSWORD:
+        return False, "EMAIL_APP_PASSWORD is not configured."
+
+    if not recipient_email:
+        return False, "Candidate email address is missing."
+
+    if not subject:
+        return False, "Email subject is missing."
+
+    if not body:
+        return False, "Email body is empty."
+
+    try:
+
+        message = EmailMessage()
+
+        message["From"] = EMAIL_ADDRESS
+        message["To"] = recipient_email
+        message["Subject"] = subject
+
+        message.set_content(body)
+
+        with smtplib.SMTP(
+            "smtp.gmail.com",
+            587
+        ) as server:
+
+            server.starttls()
+
+            server.login(
+                EMAIL_ADDRESS,
+                EMAIL_APP_PASSWORD
+            )
+
+            server.send_message(
+                message
+            )
+
+        return True, "Email sent successfully."
+
+    except Exception as e:
+
+        return False, f"Email sending failed: {e}"
 # ----------------------------------------------------
 # FastAPI Backend URL
 # ----------------------------------------------------
 
 API_URL = "http://127.0.0.1:8000"
+
+# ----------------------------------------------------
+# PROJECT OWNER ACCESS
+# ----------------------------------------------------
+# Set OWNER_EMAIL in the .env file to the project owner's
+# authenticated account email. Only this account can open
+# the Owner Admin dashboard.
+OWNER_EMAIL = os.getenv("OWNER_EMAIL", "").strip().lower()
+
+
+def is_project_owner():
+    """Return True only when the logged-in email is OWNER_EMAIL."""
+    logged_in_email = str(
+        st.session_state.get("user_email", "")
+    ).strip().lower()
+
+    return bool(
+        st.session_state.get("user_id")
+        and OWNER_EMAIL
+        and logged_in_email == OWNER_EMAIL
+    )
 
 
 
@@ -919,7 +1007,7 @@ def admin_page():
         )
 
         if st.button(
-            "➡️ Open Recruiter Dashboard",
+            "➡️ 👨‍💼 Open Recruiter Dashboard",
             use_container_width=True,
             key="admin_open_recruiter"
         ):
@@ -935,7 +1023,7 @@ def admin_page():
         )
 
         if st.button(
-            "➡️ Open Candidate Dashboard",
+            "➡️ 👨‍🎓   Open Candidate Dashboard",
             use_container_width=True,
             key="admin_open_candidate"
         ):
@@ -944,6 +1032,35 @@ def admin_page():
             st.rerun()
 
     st.divider()
+
+
+    # ========================================================
+    # PROJECT OWNER ADMIN
+    # ========================================================
+    # Owner Admin is intentionally restricted to OWNER_EMAIL.
+    owner_col1, owner_col2, owner_col3 = st.columns([1, 2, 1])
+
+    with owner_col2:
+        st.markdown("### 👑 Owner Admin")
+
+        if is_project_owner():
+            st.write(
+                "View the complete system result, candidate information, "
+                "job openings, recruitment status and AI screening results."
+            )
+
+            if st.button(
+                "🔐 Open Owner Admin",
+                use_container_width=True,
+                key="admin_open_owner_admin"
+            ):
+                st.session_state.role = "owner_admin"
+                st.session_state.page = "owner_admin"
+                st.rerun()
+        else:
+            st.write(
+                "🔒 Restricted: only the project owner can access this dashboard."
+            )
     st.subheader("📊 Current System Data")
 
     candidates = []
@@ -1053,38 +1170,7 @@ def admin_page():
     with col5:
         st.metric("❌ Rejected", rejected)
 
-    # ========================================================
-    # CANDIDATES
-    # ========================================================
-    st.divider()
-    st.subheader("👥 Candidate Management")
-
-    if valid_candidates:
-        candidate_columns = [
-            "id",
-            "name",
-            "email",
-            "phone",
-            "status",
-            "match_score",
-            "ats_score",
-            "hiring_score"
-        ]
-
-        available_columns = [
-            column
-            for column in candidate_columns
-            if any(column in row for row in valid_candidates)
-        ]
-
-        st.dataframe(
-            pd.DataFrame(valid_candidates)[available_columns],
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("No candidates found.")
-
+    
     # ========================================================
     # JOB OPENINGS
     # ========================================================
@@ -1123,6 +1209,409 @@ def admin_page():
 
 
 # ============================================================
+# ============================================================
+# PROJECT OWNER ADMIN DASHBOARD
+# ============================================================
+
+def owner_admin_page():
+    """Owner-only dashboard for complete system monitoring."""
+
+    if not is_project_owner():
+        st.error("🔒 Owner Admin access is restricted to the project owner.")
+        st.session_state.page = "admin"
+        st.rerun()
+        return
+
+    st.title("👑 Owner Admin Dashboard")
+    st.write(
+        "Complete overview of the AI Recruitment & Talent Management "
+        "Copilot, including recruiter results, candidate results, jobs "
+        "and AI screening performance."
+    )
+    st.caption(
+        f"Owner: {st.session_state.get('user_name', 'Project Owner')} "
+        f"({st.session_state.get('user_email', 'N/A')})"
+    )
+    st.divider()
+
+    candidates = []
+    jobs = []
+    screening_results = []
+
+    try:
+        response = requests.get(f"{API_URL}/candidates", timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            candidates = (
+                data.get("candidates", [])
+                if isinstance(data, dict)
+                else data
+            )
+            if not isinstance(candidates, list):
+                candidates = []
+        else:
+            st.warning(
+                f"Unable to load candidates. Backend returned {response.status_code}."
+            )
+    except requests.exceptions.ConnectionError:
+        st.error("❌ Backend is not running. Please start FastAPI first.")
+    except Exception as e:
+        st.warning(f"Unable to load candidates: {e}")
+
+    try:
+        response = requests.get(f"{API_URL}/jobs", timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            jobs = (
+                data.get("jobs", [])
+                if isinstance(data, dict)
+                else data
+            )
+            if not isinstance(jobs, list):
+                jobs = []
+        else:
+            st.warning(
+                f"Unable to load job openings. Backend returned {response.status_code}."
+            )
+    except requests.exceptions.ConnectionError:
+        st.error("❌ Backend is not running. Please start FastAPI first.")
+    except Exception as e:
+        st.warning(f"Unable to load job openings: {e}")
+
+    valid_candidates = [c for c in candidates if isinstance(c, dict)]
+    valid_jobs = [j for j in jobs if isinstance(j, dict)]
+
+    for candidate in valid_candidates:
+        candidate_id = candidate.get(
+            "id", candidate.get("candidate_id")
+        )
+        if candidate_id is None:
+            continue
+
+        try:
+            summary_response = requests.get(
+                f"{API_URL}/screening-summary/{candidate_id}",
+                timeout=10
+            )
+
+            if summary_response.status_code == 200:
+                summary_data = summary_response.json()
+                summary = (
+                    summary_data.get("summary")
+                    if isinstance(summary_data, dict)
+                    else None
+                )
+
+                if summary:
+                    screening_results.append({
+                        "candidate_id": candidate_id,
+                        "candidate": candidate,
+                        "summary": summary
+                    })
+        except requests.RequestException:
+            continue
+        except Exception:
+            continue
+
+    def number(value):
+        try:
+            if value is None or value == "":
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def average(values):
+        return sum(values) / len(values) if values else 0.0
+
+    total_candidates = len(valid_candidates)
+    total_jobs = len(valid_jobs)
+
+    shortlisted = sum(
+        1
+        for candidate in valid_candidates
+        if str(candidate.get("status", "")).lower() == "shortlisted"
+    )
+
+    selected = sum(
+        1
+        for candidate in valid_candidates
+        if str(candidate.get("status", "")).lower() in ["selected", "hired"]
+    )
+
+    rejected = sum(
+        1
+        for candidate in valid_candidates
+        if str(candidate.get("status", "")).lower() == "rejected"
+    )
+
+    under_review = sum(
+        1
+        for candidate in valid_candidates
+        if str(candidate.get("status", "")).lower()
+        in ["review", "under review", "pending", "applied"]
+    )
+
+    interviews = sum(
+        1
+        for candidate in valid_candidates
+        if str(candidate.get("status", "")).lower()
+        in ["interview", "interview scheduled"]
+    )
+
+    hiring_scores = [
+        value
+        for value in (number(c.get("hiring_score")) for c in valid_candidates)
+        if value is not None
+    ]
+    match_scores = [
+        value
+        for value in (number(c.get("match_score")) for c in valid_candidates)
+        if value is not None
+    ]
+    ats_scores = [
+        value
+        for value in (number(c.get("ats_score")) for c in valid_candidates)
+        if value is not None
+    ]
+    compatibility_scores = [
+        value
+        for value in (
+            number(c.get("compatibility_score"))
+            for c in valid_candidates
+        )
+        if value is not None
+    ]
+
+    screening_scores = []
+    screening_rows = []
+
+    for item in screening_results:
+        candidate = item["candidate"]
+        summary = item["summary"]
+        overall_score = summary.get(
+            "overall_score",
+            summary.get("final_score")
+        )
+        score = number(overall_score)
+
+        if score is not None:
+            screening_scores.append(score)
+            score_display = f"{score:.1f}%"
+        else:
+            score_display = "N/A"
+
+        recommendation = summary.get(
+            "recommendation",
+            summary.get("hiring_recommendation", "N/A")
+        ) or "N/A"
+
+        screening_rows.append({
+            "Candidate ID": item["candidate_id"],
+            "Candidate": candidate.get("name", "N/A"),
+            "Voice Screening Score": score_display,
+            "AI Recommendation": recommendation,
+            "Recruiter Status": candidate.get("status", "Under Review"),
+            "Strengths": summary.get("strengths", "N/A"),
+            "Improvement": summary.get("improvement", "N/A")
+        })
+
+    avg_hiring = average(hiring_scores)
+    avg_match = average(match_scores)
+    avg_ats = average(ats_scores)
+    avg_compatibility = average(compatibility_scores)
+    avg_screening = average(screening_scores)
+
+    st.subheader("📊 Overall System Result")
+    st.write(
+        "This page combines the current results from the Recruiter and "
+        "Candidate dashboards, including recruitment status, candidate "
+        "scores, job openings and completed AI voice screening."
+    )
+
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        st.metric("👥 Total Candidates", total_candidates)
+    with k2:
+        st.metric("💼 Job Openings", total_jobs)
+    with k3:
+        st.metric("⭐ Shortlisted", shortlisted)
+    with k4:
+        st.metric("🏆 Selected / Hired", selected)
+
+    k5, k6, k7, k8 = st.columns(4)
+    with k5:
+        st.metric("❌ Rejected", rejected)
+    with k6:
+        st.metric("⏳ Under Review", under_review)
+    with k7:
+        st.metric("🎤 Interviews", interviews)
+    with k8:
+        st.metric("🤖 Completed Screenings", len(screening_results))
+
+    st.divider()
+
+    s1, s2, s3, s4, s5 = st.columns(5)
+    with s1:
+        st.metric("🎯 Avg Match", f"{avg_match:.1f}%")
+    with s2:
+        st.metric("📄 Avg ATS", f"{avg_ats:.1f}%")
+    with s3:
+        st.metric("🔗 Avg Compatibility", f"{avg_compatibility:.1f}%")
+    with s4:
+        st.metric("🏆 Avg Hiring", f"{avg_hiring:.1f}%")
+    with s5:
+        st.metric("🎤 Avg Screening", f"{avg_screening:.1f}%")
+
+    st.divider()
+    st.subheader("👥 Candidate Information")
+
+    candidate_rows = []
+    for candidate in valid_candidates:
+        candidate_rows.append({
+            "Candidate ID": candidate.get(
+                "id", candidate.get("candidate_id", "N/A")
+            ),
+            "Candidate": candidate.get("name", "N/A"),
+            "Email": candidate.get("email", "N/A"),
+            "Phone": candidate.get("phone", "N/A"),
+            "Skills": candidate.get("skills", "N/A"),
+            "Education": candidate.get("education", "N/A"),
+            "Experience": candidate.get("experience", "N/A"),
+            "Status": candidate.get("status", "Under Review"),
+            "Match Score %": number(candidate.get("match_score")),
+            "ATS Score %": number(candidate.get("ats_score")),
+            "Compatibility %": number(candidate.get("compatibility_score")),
+            "Hiring Score %": number(candidate.get("hiring_score"))
+        })
+
+    if candidate_rows:
+        st.dataframe(
+            pd.DataFrame(candidate_rows),
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("No candidate information is available yet.")
+
+    st.divider()
+    st.subheader("🎤 Candidate Interview & Screening Results")
+
+    if screening_rows:
+        st.dataframe(
+            pd.DataFrame(screening_rows),
+            use_container_width=True,
+            hide_index=True
+        )
+        st.info(
+            "These results come from the saved screening summaries "
+            "created after candidates complete the AI voice interview."
+        )
+    else:
+        st.info(
+            "No completed voice-screening results are available yet. "
+            "Complete Candidate Dashboard → Interview first."
+        )
+
+    st.divider()
+    st.subheader("💼 Current Job Openings")
+
+    if valid_jobs:
+        st.dataframe(
+            pd.DataFrame(valid_jobs),
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("No job openings are currently available.")
+
+    st.divider()
+    st.subheader("🏁 Overall Recruitment Outcome")
+    outcome1, outcome2 = st.columns(2)
+
+    with outcome1:
+        st.markdown("### 📌 Recruiter Result")
+        st.write(f"**Candidates:** {total_candidates}")
+        st.write(f"**Jobs:** {total_jobs}")
+        st.write(f"**Shortlisted:** {shortlisted}")
+        st.write(f"**Selected / Hired:** {selected}")
+        st.write(f"**Rejected:** {rejected}")
+        st.write(f"**Under Review / Applied:** {under_review}")
+        st.write(f"**Interviews:** {interviews}")
+
+    with outcome2:
+        st.markdown("### 🤖 Candidate AI Result")
+        st.write(
+            f"**Completed Voice Screenings:** {len(screening_results)}"
+        )
+        st.write(
+            f"**Average Screening Score:** {avg_screening:.1f}%"
+        )
+
+        if screening_rows:
+            recommendation_counts = {}
+            for row in screening_rows:
+                recommendation = row["AI Recommendation"]
+                recommendation_counts[recommendation] = (
+                    recommendation_counts.get(recommendation, 0) + 1
+                )
+
+            for recommendation, count in recommendation_counts.items():
+                st.write(
+                    f"**{recommendation}:** {count} candidate(s)"
+                )
+        else:
+            st.info("No AI screening recommendation is available yet.")
+
+    st.divider()
+    st.subheader("📈 Candidate Score Analytics")
+
+    score_rows = []
+    for candidate in valid_candidates:
+        score_rows.append({
+            "Candidate": candidate.get("name", "N/A"),
+            "Match Score": number(candidate.get("match_score")),
+            "ATS Score": number(candidate.get("ats_score")),
+            "Compatibility Score": number(
+                candidate.get("compatibility_score")
+            ),
+            "Hiring Score": number(candidate.get("hiring_score"))
+        })
+
+    if score_rows:
+        st.dataframe(
+            pd.DataFrame(score_rows),
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("No candidate score data is available yet.")
+
+    st.divider()
+
+    if st.button(
+        "⬅️ Back to Admin Dashboard",
+        use_container_width=True,
+        key="owner_back_to_admin"
+    ):
+        st.session_state.role = "admin"
+        st.session_state.page = "admin"
+        st.rerun()
+
+    if st.button(
+        "🚪 Logout",
+        use_container_width=True,
+        key="owner_admin_logout"
+    ):
+        st.session_state.role = None
+        st.session_state.user_id = None
+        st.session_state.user_name = ""
+        st.session_state.user_email = ""
+        st.session_state.candidate_id = None
+        st.session_state.page = "landing"
+        st.rerun()
+
+
 # CANDIDATE AI VOICE INTERVIEW
 # ============================================================
 
@@ -1972,7 +2461,6 @@ def candidate_dashboard():
             "🔎 Available Jobs",
             "💼 Applied Jobs",
             "📋 Application Status",
-            "📩 Messages",
             "🎤 Interview",
             "🤖 AI Interview Questions",
             "📊 Interview Performance",
@@ -3556,6 +4044,23 @@ if st.session_state.page == "choose_role":
     choose_role_page() 
     st.stop() 
 # ============================================================ 
+# ============================================================
+# SHOW OWNER ADMIN DASHBOARD
+# ============================================================
+
+if st.session_state.page == "owner_admin":
+    if not st.session_state.get("user_id"):
+        st.session_state.page = "login"
+        st.rerun()
+
+    if not is_project_owner():
+        st.error("🔒 Owner Admin access is restricted to the project owner.")
+        st.session_state.page = "admin"
+        st.rerun()
+
+    owner_admin_page()
+    st.stop()
+
 # SHOW ADMIN DASHBOARD 
 # ============================================================ 
 
@@ -7413,117 +7918,1199 @@ elif selected_feature == "AI Hiring Recommendation":
 
 
 
-# ==================================================== 
-# AI Email Generator 
-# ==================================================== 
 
-elif selected_feature == "AI Email Generator": 
+# ============================================================
+# AI EMAIL GENERATOR
+# ============================================================
 
+elif selected_feature == "AI Email Generator":
 
+    st.header("📧 AI Recruitment Email Generator")
 
-    st.header( 
-        "📧 AI Recruitment Email Generator" 
-    ) 
+    st.write(
+        "Generate professional recruitment emails using "
+        "candidate information and recruiter-provided interview details."
+    )
 
+    # ========================================================
+    # LOAD CANDIDATES
+    # ========================================================
 
+    candidates = []
 
-    candidate_id = st.number_input( 
+    try:
 
-        "Candidate ID", 
+        candidates_response = requests.get(
+            f"{API_URL}/candidates",
+            timeout=20
+        )
 
-        min_value=1, 
+        if candidates_response.status_code == 200:
 
-        step=1, 
+            candidates_data = candidates_response.json()
 
-        key="email_candidate" 
+            # Handle different possible API response formats
+            if isinstance(candidates_data, dict):
 
-    ) 
+                candidates = candidates_data.get(
+                    "candidates",
+                    []
+                )
 
+            elif isinstance(candidates_data, list):
 
+                candidates = candidates_data
 
-    job_id = st.number_input( 
+            else:
 
-        "Job ID", 
+                candidates = []
 
-        min_value=1, 
+            if not isinstance(candidates, list):
 
-        step=1, 
+                candidates = []
 
-        key="email_job" 
+        else:
 
-    ) 
+            st.error(
+                f"Unable to load candidates. "
+                f"Backend returned status code "
+                f"{candidates_response.status_code}."
+            )
 
+    except Exception as e:
 
+        st.error(
+            f"Error loading candidates: {e}"
+        )
 
-    email_type = st.selectbox( 
+    # ========================================================
+    # SELECT CANDIDATE
+    # ========================================================
 
-        "Email Type", 
+    st.subheader("👤 Candidate")
 
-        [ 
+    selected_candidate = None
 
-            "Interview Invitation", 
+    candidate_options = {}
 
-            "Shortlisting", 
+    for candidate in candidates:
 
-            "Offer Letter", 
+        if not isinstance(candidate, dict):
+            continue
 
-            "Rejection" 
+        candidate_id_value = candidate.get("id")
 
-        ] 
+        candidate_name_value = (
+            candidate.get("name")
+            or candidate.get("full_name")
+            or f"Candidate {candidate_id_value}"
+        )
 
-    ) 
+        candidate_email_value = (
+            candidate.get("email")
+            or candidate.get("email_address")
+            or ""
+        )
 
+        display_name = (
+            f"{candidate_name_value} "
+            f"(ID: {candidate_id_value})"
+        )
 
+        candidate_options[display_name] = candidate
 
-    if st.button( 
-        "Generate Email" 
-    ): 
+    if candidate_options:
 
+        selected_candidate_display = st.selectbox(
+            "Select Candidate",
+            list(candidate_options.keys()),
+            key="ai_email_candidate_select"
+        )
 
+        selected_candidate = candidate_options[
+            selected_candidate_display
+        ]
 
-        response=requests.get( 
+        candidate_id = selected_candidate.get("id")
 
-            f"{API_URL}/generate-email/{candidate_id}/{job_id}/{email_type}" 
+        candidate_name = (
+            selected_candidate.get("name")
+            or selected_candidate.get("full_name")
+            or "Candidate"
+        )
 
-        ) 
+        # ====================================================
+        # IMPORTANT:
+        # EMAIL COMES FROM RESUME/DATABASE
+        # ====================================================
 
+        candidate_email = (
+            selected_candidate.get("email")
+            or selected_candidate.get("email_address")
+            or ""
+        )
 
+        candidate_email = str(
+            candidate_email
+        ).strip()
 
-        if response.status_code==200: 
+        if candidate_email:
 
+            st.success(
+                f"📧 Candidate Email: {candidate_email}"
+            )
 
+            st.caption(
+                "This email is taken from the candidate "
+                "information stored in the system."
+            )
 
-            result=response.json() 
+        else:
 
+            st.error(
+                "❌ No email address is available for this candidate. "
+                "The email extracted from the uploaded resume may be missing."
+            )
 
+    else:
 
-            st.subheader( 
-                "📨 Generated Email" 
-            ) 
+        st.warning(
+            "No candidates are available."
+        )
 
+        candidate_id = None
+        candidate_name = ""
+        candidate_email = ""
 
+    # ========================================================
+    # LOAD JOBS
+    # ========================================================
 
-            if "email" in result: 
+    jobs = []
 
-                st.write( 
-                    result["email"] 
-                ) 
+    try:
 
-            else: 
+        jobs_response = requests.get(
+            f"{API_URL}/jobs",
+            timeout=20
+        )
 
-                st.write( 
-                    result 
-                ) 
+        if jobs_response.status_code == 200:
 
+            jobs_data = jobs_response.json()
 
+            if isinstance(jobs_data, dict):
 
-        else: 
+                jobs = jobs_data.get(
+                    "jobs",
+                    []
+                )
 
+            elif isinstance(jobs_data, list):
 
+                jobs = jobs_data
 
-            st.error( 
-                "Email generation failed." 
-            ) 
+            else:
+
+                jobs = []
+
+            if not isinstance(jobs, list):
+
+                jobs = []
+
+        else:
+
+            st.error(
+                f"Unable to load jobs. "
+                f"Backend returned status code "
+                f"{jobs_response.status_code}."
+            )
+
+    except Exception as e:
+
+        st.error(
+            f"Error loading jobs: {e}"
+        )
+
+    # ========================================================
+    # SELECT JOB
+    # ========================================================
+
+    st.subheader("💼 Job")
+
+    selected_job = None
+
+    job_options = {}
+
+    for job in jobs:
+
+        if not isinstance(job, dict):
+            continue
+
+        job_id_value = job.get("id")
+
+        job_title_value = (
+            job.get("job_title")
+            or job.get("title")
+            or job.get("position")
+            or f"Job {job_id_value}"
+        )
+
+        company_value = (
+            job.get("company")
+            or job.get("company_name")
+            or ""
+        )
+
+        if company_value:
+
+            display_job = (
+                f"{job_title_value} - "
+                f"{company_value} "
+                f"(ID: {job_id_value})"
+            )
+
+        else:
+
+            display_job = (
+                f"{job_title_value} "
+                f"(ID: {job_id_value})"
+            )
+
+        job_options[display_job] = job
+
+    if job_options:
+
+        selected_job_display = st.selectbox(
+            "Select Job",
+            list(job_options.keys()),
+            key="ai_email_job_select"
+        )
+
+        selected_job = job_options[
+            selected_job_display
+        ]
+
+        job_id = selected_job.get("id")
+
+        job_title = (
+            selected_job.get("job_title")
+            or selected_job.get("title")
+            or selected_job.get("position")
+            or "Job Position"
+        )
+
+        company_name = (
+            selected_job.get("company")
+            or selected_job.get("company_name")
+            or ""
+        )
+
+    else:
+
+        st.warning(
+            "No jobs are available."
+        )
+
+        job_id = None
+        job_title = ""
+        company_name = ""
+
+    # ========================================================
+    # EMAIL TYPE
+    # ========================================================
+
+    st.subheader("📨 Email Type")
+
+    email_type = st.selectbox(
+        "Select Email Type",
+        [
+            "Interview Invitation",
+            "Shortlisting",
+            "Offer Letter",
+            "Rejection"
+        ],
+        key="ai_email_type"
+    )
+
+    # ========================================================
+    # INTERVIEW DETAILS
+    # ========================================================
+
+    if email_type == "Interview Invitation":
+
+        st.subheader(
+            "📅 Interview Schedule"
+        )
+
+        # ----------------------------------------------------
+        # DATE
+        # ----------------------------------------------------
+
+        interview_date = st.date_input(
+            "📅 Interview Date",
+            key="ai_email_interview_date"
+        )
+
+        # ----------------------------------------------------
+        # TIME
+        # ----------------------------------------------------
+
+        interview_time = st.time_input(
+            "⏰ Interview Time",
+            key="ai_email_interview_time"
+        )
+
+        # ----------------------------------------------------
+        # FORMAT
+        # ----------------------------------------------------
+
+        interview_format = st.selectbox(
+            "📋 Interview Format",
+            [
+                "Online",
+                "Offline",
+                "Hybrid"
+            ],
+            key="ai_email_interview_format"
+        )
+
+        # ----------------------------------------------------
+        # MEETING LINK
+        # ----------------------------------------------------
+
+        meeting_link = ""
+
+        if interview_format in [
+            "Online",
+            "Hybrid"
+        ]:
+
+            meeting_link = st.text_input(
+                "🔗 Meeting Link",
+                placeholder=(
+                    "Paste Microsoft Teams / Zoom / "
+                    "Google Meet link"
+                ),
+                key="ai_email_meeting_link"
+            )
+
+        # ----------------------------------------------------
+        # LOCATION
+        # ----------------------------------------------------
+
+        interview_location = ""
+
+        if interview_format in [
+            "Offline",
+            "Hybrid"
+        ]:
+
+            interview_location = st.text_input(
+                "📍 Interview Location",
+                placeholder=(
+                    "Example: Infosys Hyderabad Campus"
+                ),
+                key="ai_email_interview_location"
+            )
+
+        # ----------------------------------------------------
+        # INTERVIEWERS
+        # ----------------------------------------------------
+
+        st.subheader(
+            "👥 Interviewers"
+        )
+
+        interviewer_text = st.text_area(
+            "Enter Interviewer Names and Titles",
+            placeholder=(
+                "Example:\n"
+                "Rahul Sharma - Senior Technical Interviewer\n"
+                "Priya Reddy - HR Manager"
+            ),
+            height=120,
+            key="ai_email_interviewers"
+        )
+
+        # ----------------------------------------------------
+        # ADDITIONAL MESSAGE
+        # ----------------------------------------------------
+
+        additional_message = st.text_area(
+            "📝 Additional Message (Optional)",
+            placeholder=(
+                "Enter any additional information "
+                "you want to include."
+            ),
+            height=100,
+            key="ai_email_additional_message"
+        )
+
+    else:
+
+        # These values are not required for non-interview emails.
+        interview_date = None
+        interview_time = None
+        interview_format = ""
+        meeting_link = ""
+        interview_location = ""
+        interviewer_text = ""
+
+        additional_message = st.text_area(
+            "📝 Additional Message (Optional)",
+            placeholder=(
+                "Enter any additional information "
+                "you want to include."
+            ),
+            height=120,
+            key="ai_email_additional_message_non_interview"
+        )
+
+    # ========================================================
+    # INTERVIEW PREVIEW
+    # ========================================================
+
+    if email_type == "Interview Invitation":
+
+        st.subheader(
+            "👀 Interview Details Preview"
+        )
+
+        preview_col1, preview_col2 = st.columns(2)
+
+        with preview_col1:
+
+            st.write(
+                f"📅 **Date:** "
+                f"{interview_date.strftime('%d %B %Y')}"
+            )
+
+            st.write(
+                f"⏰ **Time:** "
+                f"{interview_time.strftime('%I:%M %p')}"
+            )
+
+            st.write(
+                f"📋 **Format:** "
+                f"{interview_format}"
+            )
+
+        with preview_col2:
+
+            if meeting_link:
+
+                st.write(
+                    f"🔗 **Meeting Link:** "
+                    f"{meeting_link}"
+                )
+
+            if interview_location:
+
+                st.write(
+                    f"📍 **Location:** "
+                    f"{interview_location}"
+                )
+
+            st.write(
+                "👥 **Interviewers:**"
+            )
+
+            if interviewer_text.strip():
+
+                st.text(
+                    interviewer_text
+                )
+
+            else:
+
+                st.warning(
+                    "No interviewers entered."
+                )
+
+    # ========================================================
+    # VALIDATION
+    # ========================================================
+
+    email_details_valid = True
+    validation_message = ""
+
+    if not candidate_email:
+
+        email_details_valid = False
+
+        validation_message = (
+            "Candidate email address is missing. "
+            "Please make sure the candidate's uploaded resume "
+            "contains an email address."
+        )
+
+    elif not job_id:
+
+        email_details_valid = False
+
+        validation_message = (
+            "Please select a job."
+        )
+
+    elif email_type == "Interview Invitation":
+
+        if not interviewer_text.strip():
+
+            email_details_valid = False
+
+            validation_message = (
+                "Please enter interviewer name(s) "
+                "and title(s)."
+            )
+
+        elif (
+            interview_format in [
+                "Online",
+                "Hybrid"
+            ]
+            and not meeting_link.strip()
+        ):
+
+            email_details_valid = False
+
+            validation_message = (
+                "Please enter the meeting link "
+                "for the selected interview format."
+            )
+
+        elif (
+            interview_format in [
+                "Offline",
+                "Hybrid"
+            ]
+            and not interview_location.strip()
+        ):
+
+            email_details_valid = False
+
+            validation_message = (
+                "Please enter the interview location "
+                "for the selected interview format."
+            )
+
+    # ========================================================
+    # GENERATE AI EMAIL
+    # ========================================================
+
+    if st.button(
+        "🤖 Generate AI Email",
+        use_container_width=True,
+        key="generate_ai_recruitment_email"
+    ):
+
+        if not email_details_valid:
+
+            st.error(
+                f"❌ {validation_message}"
+            )
+
+        elif groq_client is None:
+
+            st.error(
+                "❌ GROQ_API_KEY is not configured."
+            )
+
+        else:
+
+            # =================================================
+            # FORMAT DATE AND TIME
+            # =================================================
+
+            if interview_date:
+
+                formatted_date = (
+                    interview_date.strftime(
+                        "%d %B %Y"
+                    )
+                )
+
+            else:
+
+                formatted_date = ""
+
+            if interview_time:
+
+                formatted_time = (
+                    interview_time.strftime(
+                        "%I:%M %p"
+                    )
+                )
+
+            else:
+
+                formatted_time = ""
+
+            # =================================================
+            # BUILD INTERVIEW INFORMATION
+            # =================================================
+
+            interview_information = ""
+
+            if email_type == "Interview Invitation":
+
+                interview_information = f"""
+INTERVIEW DATE:
+{formatted_date}
+
+INTERVIEW TIME:
+{formatted_time}
+
+INTERVIEW FORMAT:
+{interview_format}
+
+INTERVIEWERS:
+{interviewer_text}
+"""
+
+                if meeting_link:
+
+                    interview_information += f"""
+MEETING LINK:
+{meeting_link}
+"""
+
+                if interview_location:
+
+                    interview_information += f"""
+INTERVIEW LOCATION:
+{interview_location}
+"""
+
+            # =================================================
+            # AI PROMPT
+            # =================================================
+
+            email_prompt = f"""
+You are an AI recruitment email assistant.
+
+Generate ONE professional email for the candidate.
+
+====================================================
+CANDIDATE INFORMATION
+====================================================
+
+Candidate Name:
+{candidate_name}
+
+Candidate Email:
+{candidate_email}
+
+====================================================
+JOB INFORMATION
+====================================================
+
+Job ID:
+{job_id}
+
+Job Position:
+{job_title}
+
+Company:
+{company_name}
+
+====================================================
+EMAIL TYPE
+====================================================
+
+{email_type}
+
+====================================================
+RECRUITER-PROVIDED INFORMATION
+====================================================
+
+{interview_information}
+
+Additional Message:
+{additional_message}
+
+====================================================
+CRITICAL RULES
+====================================================
+
+The information provided by the recruiter is FINAL.
+
+You MUST preserve the exact information.
+
+For an interview invitation:
+
+1. Use exactly this interview date:
+   {formatted_date}
+
+2. Use exactly this interview time:
+   {formatted_time}
+
+3. Use exactly this interview format:
+   {interview_format}
+
+4. Use exactly these interviewer details:
+   {interviewer_text}
+
+5. Use the exact meeting link when provided:
+   {meeting_link}
+
+6. Use the exact location when provided:
+   {interview_location}
+
+7. Use the actual candidate name:
+   {candidate_name}
+
+8. Use the actual job position:
+   {job_title}
+
+====================================================
+NEVER DO THESE THINGS
+====================================================
+
+DO NOT:
+
+- Suggest two dates.
+- Suggest two times.
+- Suggest alternative dates.
+- Suggest alternative times.
+- Ask the candidate to select a date.
+- Ask the candidate to select a time.
+- Write "(suggest two options)".
+- Write "[Name]".
+- Write "[Title]".
+- Write "[Date]".
+- Write "[Time]".
+- Write "[Link]".
+- Write "[Location]".
+- Write "[Interviewer Name]".
+- Write "[Interviewer Title]".
+- Write "link to be provided upon confirmation".
+- Write "Microsoft Teams / Zoom" as a generic choice.
+- Invent a meeting link.
+- Invent an interviewer.
+- Invent an interviewer title.
+- Invent a location.
+- Invent a date.
+- Invent a time.
+- Change recruiter-provided information.
+- Create multiple versions of the email.
+
+The recruiter has already fixed the interview schedule.
+
+The email must communicate the fixed schedule.
+
+====================================================
+EMAIL STYLE
+====================================================
+
+The email must be:
+
+- Professional
+- Clear
+- Concise
+- Polite
+- Suitable for a recruitment process
+
+Include a professional greeting.
+
+Clearly display the interview details.
+
+End with a professional recruitment closing.
+
+====================================================
+OUTPUT FORMAT
+====================================================
+
+Return ONLY the following:
+
+Subject: <professional subject>
+
+<complete email body>
+
+Do not add explanations outside the email.
+Do not add notes.
+Do not add alternative versions.
+Do not use placeholders.
+"""
+
+            # =================================================
+            # GENERATE USING GROQ
+            # =================================================
+
+            try:
+
+                completion = (
+                    groq_client
+                    .chat
+                    .completions
+                    .create(
+                        model="openai/gpt-oss-20b",
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You are a professional "
+                                    "recruitment email assistant. "
+                                    "Always preserve exact "
+                                    "recruiter-provided details. "
+                                    "Never create placeholders "
+                                    "or alternative schedules."
+                                )
+                            },
+                            {
+                                "role": "user",
+                                "content": email_prompt
+                            }
+                        ],
+                        temperature=0.1
+                    )
+                )
+
+                generated_email = (
+                    completion
+                    .choices[0]
+                    .message
+                    .content
+                    .strip()
+                )
+
+                # =================================================
+                # STORE GENERATED EMAIL
+                # =================================================
+
+                st.session_state[
+                    "generated_recruitment_email"
+                ] = generated_email
+
+                st.session_state[
+                    "generated_recruitment_email_candidate"
+                ] = candidate_email
+
+                st.session_state[
+                    "generated_recruitment_email_name"
+                ] = candidate_name
+
+                st.session_state[
+                    "generated_recruitment_email_job"
+                ] = job_title
+
+                st.success(
+                    "✅ AI email generated successfully."
+                )
+
+            except Exception as e:
+
+                st.error(
+                    f"❌ AI email generation failed: {e}"
+                )
+
+    # ========================================================
+    # SHOW GENERATED EMAIL
+    # ========================================================
+
+    if (
+        "generated_recruitment_email"
+        in st.session_state
+    ):
+
+        st.subheader(
+            "📨 Generated Recruitment Email"
+        )
+
+        edited_email = st.text_area(
+            "✏️ Review / Edit Email Before Sending",
+            value=st.session_state[
+                "generated_recruitment_email"
+            ],
+            height=400,
+            key="ai_email_editor"
+        )
+
+        # ====================================================
+        # FINAL INTERVIEW DETAILS
+        # ====================================================
+
+        if email_type == "Interview Invitation":
+
+            st.subheader(
+                "🔎 Final Interview Details"
+            )
+
+            final_col1, final_col2 = st.columns(2)
+
+            with final_col1:
+
+                st.write(
+                    f"📅 **Date:** "
+                    f"{interview_date.strftime('%d %B %Y')}"
+                )
+
+                st.write(
+                    f"⏰ **Time:** "
+                    f"{interview_time.strftime('%I:%M %p')}"
+                )
+
+                st.write(
+                    f"📋 **Format:** "
+                    f"{interview_format}"
+                )
+
+            with final_col2:
+
+                st.write(
+                    "👥 **Interviewers:**"
+                )
+
+                st.text(
+                    interviewer_text
+                )
+
+                if meeting_link:
+
+                    st.write(
+                        f"🔗 **Meeting Link:** "
+                        f"{meeting_link}"
+                    )
+
+                if interview_location:
+
+                    st.write(
+                        f"📍 **Location:** "
+                        f"{interview_location}"
+                    )
+
+        # ====================================================
+        # SEND EMAIL BUTTON
+        # ====================================================
+
+        st.subheader(
+            "📤 Send Email"
+        )
+
+        st.info(
+            f"Email will be sent directly to: "
+            f"{candidate_email}"
+        )
+
+        if st.button(
+            "📧 Send Email to Candidate",
+            use_container_width=True,
+            key="send_ai_recruitment_email"
+        ):
+
+            # =================================================
+            # FINAL VALIDATION
+            # =================================================
+
+            if not candidate_email:
+
+                st.error(
+                    "❌ Candidate email address is missing."
+                )
+
+            elif not edited_email.strip():
+
+                st.error(
+                    "❌ Email body cannot be empty."
+                )
+
+            elif not EMAIL_ADDRESS:
+
+                st.error(
+                    "❌ EMAIL_ADDRESS is not configured "
+                    "in the .env file."
+                )
+
+            elif not EMAIL_APP_PASSWORD:
+
+                st.error(
+                    "❌ EMAIL_APP_PASSWORD is not configured "
+                    "in the .env file."
+                )
+
+            else:
+
+                # =================================================
+                # EXTRACT SUBJECT
+                # =================================================
+
+                email_lines = (
+                    edited_email
+                    .strip()
+                    .splitlines()
+                )
+
+                email_subject = ""
+                email_body_lines = []
+
+                for line in email_lines:
+
+                    stripped_line = (
+                        line.strip()
+                    )
+
+                    if (
+                        not email_subject
+                        and stripped_line
+                        .lower()
+                        .startswith("subject:")
+                    ):
+
+                        email_subject = (
+                            stripped_line
+                            .split(
+                                ":",
+                                1
+                            )[1]
+                            .strip()
+                        )
+
+                    else:
+
+                        email_body_lines.append(
+                            line
+                        )
+
+                # =================================================
+                # DEFAULT SUBJECT
+                # =================================================
+
+                if not email_subject:
+
+                    if (
+                        email_type
+                        == "Interview Invitation"
+                    ):
+
+                        email_subject = (
+                            f"Interview Invitation - "
+                            f"{job_title}"
+                        )
+
+                    elif (
+                        email_type
+                        == "Shortlisting"
+                    ):
+
+                        email_subject = (
+                            f"Application Shortlisted - "
+                            f"{job_title}"
+                        )
+
+                    elif (
+                        email_type
+                        == "Offer Letter"
+                    ):
+
+                        email_subject = (
+                            f"Job Offer - "
+                            f"{job_title}"
+                        )
+
+                    else:
+
+                        email_subject = (
+                            f"Application Update - "
+                            f"{job_title}"
+                        )
+
+                # =================================================
+                # FINAL EMAIL BODY
+                # =================================================
+
+                email_body = (
+                    "\n".join(
+                        email_body_lines
+                    )
+                    .strip()
+                )
+
+                # =================================================
+                # SEND DIRECTLY TO RESUME EMAIL
+                # =================================================
+
+                if not email_body:
+
+                    st.error(
+                        "❌ Email body cannot be empty."
+                    )
+
+                else:
+
+                    with st.spinner(
+                        "📧 Sending email directly "
+                        "to candidate..."
+                    ):
+
+                        email_sent, email_message = (
+                            send_email_to_candidate(
+                                recipient_email=(
+                                    candidate_email
+                                ),
+                                subject=(
+                                    email_subject
+                                ),
+                                body=(
+                                    email_body
+                                )
+                            )
+                        )
+
+                    # =================================================
+                    # SUCCESS
+                    # =================================================
+
+                    if email_sent:
+
+                        st.success(
+                            "✅ Email sent successfully!"
+                        )
+
+                        st.success(
+                            f"📨 Sent to: "
+                            f"{candidate_name} "
+                            f"({candidate_email})"
+                        )
+
+                        st.info(
+                            f"📌 Subject: "
+                            f"{email_subject}"
+                        )
+
+                        # =============================================
+                        # SAVE SENT EMAIL DETAILS
+                        # =============================================
+
+                        st.session_state[
+                            "last_sent_candidate_email"
+                        ] = candidate_email
+
+                        st.session_state[
+                            "last_sent_candidate_name"
+                        ] = candidate_name
+
+                        st.session_state[
+                            "last_sent_email_subject"
+                        ] = email_subject
+
+                        st.session_state[
+                            "last_sent_email_body"
+                        ] = email_body
+
+                        st.session_state[
+                            "last_email_sent"
+                        ] = True
+
+                    # =================================================
+                    # FAILURE
+                    # =================================================
+
+                    else:
+
+                        st.error(
+                            f"❌ {email_message}"
+                        )
+
 # ==================================================== 
 # Recruiter Analytics 
 # ==================================================== 
