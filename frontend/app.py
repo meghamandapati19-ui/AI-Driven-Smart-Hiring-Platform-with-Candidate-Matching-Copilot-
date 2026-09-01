@@ -6,6 +6,7 @@ import os
 from urllib.parse import quote
 import smtplib
 from email.message import EmailMessage
+
 from docx import Document
 from dotenv import load_dotenv
 from groq import Groq
@@ -98,32 +99,13 @@ def send_email_to_candidate(
     except Exception as e:
 
         return False, f"Email sending failed: {e}"
+
+
 # ----------------------------------------------------
 # FastAPI Backend URL
 # ----------------------------------------------------
 
 API_URL = "http://127.0.0.1:8000"
-
-# ----------------------------------------------------
-# PROJECT OWNER ACCESS
-# ----------------------------------------------------
-# Set OWNER_EMAIL in the .env file to the project owner's
-# authenticated account email. Only this account can open
-# the Owner Admin dashboard.
-OWNER_EMAIL = os.getenv("OWNER_EMAIL", "").strip().lower()
-
-
-def is_project_owner():
-    """Return True only when the logged-in email is OWNER_EMAIL."""
-    logged_in_email = str(
-        st.session_state.get("user_email", "")
-    ).strip().lower()
-
-    return bool(
-        st.session_state.get("user_id")
-        and OWNER_EMAIL
-        and logged_in_email == OWNER_EMAIL
-    )
 
 
 
@@ -1032,35 +1014,6 @@ def admin_page():
             st.rerun()
 
     st.divider()
-
-
-    # ========================================================
-    # PROJECT OWNER ADMIN
-    # ========================================================
-    # Owner Admin is intentionally restricted to OWNER_EMAIL.
-    owner_col1, owner_col2, owner_col3 = st.columns([1, 2, 1])
-
-    with owner_col2:
-        st.markdown("### 👑 Owner Admin")
-
-        if is_project_owner():
-            st.write(
-                "View the complete system result, candidate information, "
-                "job openings, recruitment status and AI screening results."
-            )
-
-            if st.button(
-                "🔐 Open Owner Admin",
-                use_container_width=True,
-                key="admin_open_owner_admin"
-            ):
-                st.session_state.role = "owner_admin"
-                st.session_state.page = "owner_admin"
-                st.rerun()
-        else:
-            st.write(
-                "🔒 Restricted: only the project owner can access this dashboard."
-            )
     st.subheader("📊 Current System Data")
 
     candidates = []
@@ -1209,409 +1162,6 @@ def admin_page():
 
 
 # ============================================================
-# ============================================================
-# PROJECT OWNER ADMIN DASHBOARD
-# ============================================================
-
-def owner_admin_page():
-    """Owner-only dashboard for complete system monitoring."""
-
-    if not is_project_owner():
-        st.error("🔒 Owner Admin access is restricted to the project owner.")
-        st.session_state.page = "admin"
-        st.rerun()
-        return
-
-    st.title("👑 Owner Admin Dashboard")
-    st.write(
-        "Complete overview of the AI Recruitment & Talent Management "
-        "Copilot, including recruiter results, candidate results, jobs "
-        "and AI screening performance."
-    )
-    st.caption(
-        f"Owner: {st.session_state.get('user_name', 'Project Owner')} "
-        f"({st.session_state.get('user_email', 'N/A')})"
-    )
-    st.divider()
-
-    candidates = []
-    jobs = []
-    screening_results = []
-
-    try:
-        response = requests.get(f"{API_URL}/candidates", timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            candidates = (
-                data.get("candidates", [])
-                if isinstance(data, dict)
-                else data
-            )
-            if not isinstance(candidates, list):
-                candidates = []
-        else:
-            st.warning(
-                f"Unable to load candidates. Backend returned {response.status_code}."
-            )
-    except requests.exceptions.ConnectionError:
-        st.error("❌ Backend is not running. Please start FastAPI first.")
-    except Exception as e:
-        st.warning(f"Unable to load candidates: {e}")
-
-    try:
-        response = requests.get(f"{API_URL}/jobs", timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            jobs = (
-                data.get("jobs", [])
-                if isinstance(data, dict)
-                else data
-            )
-            if not isinstance(jobs, list):
-                jobs = []
-        else:
-            st.warning(
-                f"Unable to load job openings. Backend returned {response.status_code}."
-            )
-    except requests.exceptions.ConnectionError:
-        st.error("❌ Backend is not running. Please start FastAPI first.")
-    except Exception as e:
-        st.warning(f"Unable to load job openings: {e}")
-
-    valid_candidates = [c for c in candidates if isinstance(c, dict)]
-    valid_jobs = [j for j in jobs if isinstance(j, dict)]
-
-    for candidate in valid_candidates:
-        candidate_id = candidate.get(
-            "id", candidate.get("candidate_id")
-        )
-        if candidate_id is None:
-            continue
-
-        try:
-            summary_response = requests.get(
-                f"{API_URL}/screening-summary/{candidate_id}",
-                timeout=10
-            )
-
-            if summary_response.status_code == 200:
-                summary_data = summary_response.json()
-                summary = (
-                    summary_data.get("summary")
-                    if isinstance(summary_data, dict)
-                    else None
-                )
-
-                if summary:
-                    screening_results.append({
-                        "candidate_id": candidate_id,
-                        "candidate": candidate,
-                        "summary": summary
-                    })
-        except requests.RequestException:
-            continue
-        except Exception:
-            continue
-
-    def number(value):
-        try:
-            if value is None or value == "":
-                return None
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-    def average(values):
-        return sum(values) / len(values) if values else 0.0
-
-    total_candidates = len(valid_candidates)
-    total_jobs = len(valid_jobs)
-
-    shortlisted = sum(
-        1
-        for candidate in valid_candidates
-        if str(candidate.get("status", "")).lower() == "shortlisted"
-    )
-
-    selected = sum(
-        1
-        for candidate in valid_candidates
-        if str(candidate.get("status", "")).lower() in ["selected", "hired"]
-    )
-
-    rejected = sum(
-        1
-        for candidate in valid_candidates
-        if str(candidate.get("status", "")).lower() == "rejected"
-    )
-
-    under_review = sum(
-        1
-        for candidate in valid_candidates
-        if str(candidate.get("status", "")).lower()
-        in ["review", "under review", "pending", "applied"]
-    )
-
-    interviews = sum(
-        1
-        for candidate in valid_candidates
-        if str(candidate.get("status", "")).lower()
-        in ["interview", "interview scheduled"]
-    )
-
-    hiring_scores = [
-        value
-        for value in (number(c.get("hiring_score")) for c in valid_candidates)
-        if value is not None
-    ]
-    match_scores = [
-        value
-        for value in (number(c.get("match_score")) for c in valid_candidates)
-        if value is not None
-    ]
-    ats_scores = [
-        value
-        for value in (number(c.get("ats_score")) for c in valid_candidates)
-        if value is not None
-    ]
-    compatibility_scores = [
-        value
-        for value in (
-            number(c.get("compatibility_score"))
-            for c in valid_candidates
-        )
-        if value is not None
-    ]
-
-    screening_scores = []
-    screening_rows = []
-
-    for item in screening_results:
-        candidate = item["candidate"]
-        summary = item["summary"]
-        overall_score = summary.get(
-            "overall_score",
-            summary.get("final_score")
-        )
-        score = number(overall_score)
-
-        if score is not None:
-            screening_scores.append(score)
-            score_display = f"{score:.1f}%"
-        else:
-            score_display = "N/A"
-
-        recommendation = summary.get(
-            "recommendation",
-            summary.get("hiring_recommendation", "N/A")
-        ) or "N/A"
-
-        screening_rows.append({
-            "Candidate ID": item["candidate_id"],
-            "Candidate": candidate.get("name", "N/A"),
-            "Voice Screening Score": score_display,
-            "AI Recommendation": recommendation,
-            "Recruiter Status": candidate.get("status", "Under Review"),
-            "Strengths": summary.get("strengths", "N/A"),
-            "Improvement": summary.get("improvement", "N/A")
-        })
-
-    avg_hiring = average(hiring_scores)
-    avg_match = average(match_scores)
-    avg_ats = average(ats_scores)
-    avg_compatibility = average(compatibility_scores)
-    avg_screening = average(screening_scores)
-
-    st.subheader("📊 Overall System Result")
-    st.write(
-        "This page combines the current results from the Recruiter and "
-        "Candidate dashboards, including recruitment status, candidate "
-        "scores, job openings and completed AI voice screening."
-    )
-
-    k1, k2, k3, k4 = st.columns(4)
-    with k1:
-        st.metric("👥 Total Candidates", total_candidates)
-    with k2:
-        st.metric("💼 Job Openings", total_jobs)
-    with k3:
-        st.metric("⭐ Shortlisted", shortlisted)
-    with k4:
-        st.metric("🏆 Selected / Hired", selected)
-
-    k5, k6, k7, k8 = st.columns(4)
-    with k5:
-        st.metric("❌ Rejected", rejected)
-    with k6:
-        st.metric("⏳ Under Review", under_review)
-    with k7:
-        st.metric("🎤 Interviews", interviews)
-    with k8:
-        st.metric("🤖 Completed Screenings", len(screening_results))
-
-    st.divider()
-
-    s1, s2, s3, s4, s5 = st.columns(5)
-    with s1:
-        st.metric("🎯 Avg Match", f"{avg_match:.1f}%")
-    with s2:
-        st.metric("📄 Avg ATS", f"{avg_ats:.1f}%")
-    with s3:
-        st.metric("🔗 Avg Compatibility", f"{avg_compatibility:.1f}%")
-    with s4:
-        st.metric("🏆 Avg Hiring", f"{avg_hiring:.1f}%")
-    with s5:
-        st.metric("🎤 Avg Screening", f"{avg_screening:.1f}%")
-
-    st.divider()
-    st.subheader("👥 Candidate Information")
-
-    candidate_rows = []
-    for candidate in valid_candidates:
-        candidate_rows.append({
-            "Candidate ID": candidate.get(
-                "id", candidate.get("candidate_id", "N/A")
-            ),
-            "Candidate": candidate.get("name", "N/A"),
-            "Email": candidate.get("email", "N/A"),
-            "Phone": candidate.get("phone", "N/A"),
-            "Skills": candidate.get("skills", "N/A"),
-            "Education": candidate.get("education", "N/A"),
-            "Experience": candidate.get("experience", "N/A"),
-            "Status": candidate.get("status", "Under Review"),
-            "Match Score %": number(candidate.get("match_score")),
-            "ATS Score %": number(candidate.get("ats_score")),
-            "Compatibility %": number(candidate.get("compatibility_score")),
-            "Hiring Score %": number(candidate.get("hiring_score"))
-        })
-
-    if candidate_rows:
-        st.dataframe(
-            pd.DataFrame(candidate_rows),
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("No candidate information is available yet.")
-
-    st.divider()
-    st.subheader("🎤 Candidate Interview & Screening Results")
-
-    if screening_rows:
-        st.dataframe(
-            pd.DataFrame(screening_rows),
-            use_container_width=True,
-            hide_index=True
-        )
-        st.info(
-            "These results come from the saved screening summaries "
-            "created after candidates complete the AI voice interview."
-        )
-    else:
-        st.info(
-            "No completed voice-screening results are available yet. "
-            "Complete Candidate Dashboard → Interview first."
-        )
-
-    st.divider()
-    st.subheader("💼 Current Job Openings")
-
-    if valid_jobs:
-        st.dataframe(
-            pd.DataFrame(valid_jobs),
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("No job openings are currently available.")
-
-    st.divider()
-    st.subheader("🏁 Overall Recruitment Outcome")
-    outcome1, outcome2 = st.columns(2)
-
-    with outcome1:
-        st.markdown("### 📌 Recruiter Result")
-        st.write(f"**Candidates:** {total_candidates}")
-        st.write(f"**Jobs:** {total_jobs}")
-        st.write(f"**Shortlisted:** {shortlisted}")
-        st.write(f"**Selected / Hired:** {selected}")
-        st.write(f"**Rejected:** {rejected}")
-        st.write(f"**Under Review / Applied:** {under_review}")
-        st.write(f"**Interviews:** {interviews}")
-
-    with outcome2:
-        st.markdown("### 🤖 Candidate AI Result")
-        st.write(
-            f"**Completed Voice Screenings:** {len(screening_results)}"
-        )
-        st.write(
-            f"**Average Screening Score:** {avg_screening:.1f}%"
-        )
-
-        if screening_rows:
-            recommendation_counts = {}
-            for row in screening_rows:
-                recommendation = row["AI Recommendation"]
-                recommendation_counts[recommendation] = (
-                    recommendation_counts.get(recommendation, 0) + 1
-                )
-
-            for recommendation, count in recommendation_counts.items():
-                st.write(
-                    f"**{recommendation}:** {count} candidate(s)"
-                )
-        else:
-            st.info("No AI screening recommendation is available yet.")
-
-    st.divider()
-    st.subheader("📈 Candidate Score Analytics")
-
-    score_rows = []
-    for candidate in valid_candidates:
-        score_rows.append({
-            "Candidate": candidate.get("name", "N/A"),
-            "Match Score": number(candidate.get("match_score")),
-            "ATS Score": number(candidate.get("ats_score")),
-            "Compatibility Score": number(
-                candidate.get("compatibility_score")
-            ),
-            "Hiring Score": number(candidate.get("hiring_score"))
-        })
-
-    if score_rows:
-        st.dataframe(
-            pd.DataFrame(score_rows),
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("No candidate score data is available yet.")
-
-    st.divider()
-
-    if st.button(
-        "⬅️ Back to Admin Dashboard",
-        use_container_width=True,
-        key="owner_back_to_admin"
-    ):
-        st.session_state.role = "admin"
-        st.session_state.page = "admin"
-        st.rerun()
-
-    if st.button(
-        "🚪 Logout",
-        use_container_width=True,
-        key="owner_admin_logout"
-    ):
-        st.session_state.role = None
-        st.session_state.user_id = None
-        st.session_state.user_name = ""
-        st.session_state.user_email = ""
-        st.session_state.candidate_id = None
-        st.session_state.page = "landing"
-        st.rerun()
-
-
 # CANDIDATE AI VOICE INTERVIEW
 # ============================================================
 
@@ -4044,23 +3594,6 @@ if st.session_state.page == "choose_role":
     choose_role_page() 
     st.stop() 
 # ============================================================ 
-# ============================================================
-# SHOW OWNER ADMIN DASHBOARD
-# ============================================================
-
-if st.session_state.page == "owner_admin":
-    if not st.session_state.get("user_id"):
-        st.session_state.page = "login"
-        st.rerun()
-
-    if not is_project_owner():
-        st.error("🔒 Owner Admin access is restricted to the project owner.")
-        st.session_state.page = "admin"
-        st.rerun()
-
-    owner_admin_page()
-    st.stop()
-
 # SHOW ADMIN DASHBOARD 
 # ============================================================ 
 
@@ -7913,12 +7446,6 @@ elif selected_feature == "AI Hiring Recommendation":
                 ) 
 
 
-
-
-
-
-
-
 # ============================================================
 # AI EMAIL GENERATOR
 # ============================================================
@@ -9111,7 +8638,11 @@ Do not use placeholders.
                             f"❌ {email_message}"
                         )
 
-# ==================================================== 
+
+
+
+
+# ====================================================
 # Recruiter Analytics 
 # ==================================================== 
 
